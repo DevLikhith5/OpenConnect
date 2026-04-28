@@ -6,6 +6,7 @@ import {
   PaperAirplaneIcon,
   XMarkIcon,
   DocumentIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
 
 export default function MessageInput({ onSend, disabled, dark, onAfterChange }) {
@@ -13,6 +14,9 @@ export default function MessageInput({ onSend, disabled, dark, onAfterChange }) 
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
   const fileRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -33,6 +37,16 @@ export default function MessageInput({ onSend, disabled, dark, onAfterChange }) 
     if (pendingFile) {
       onSend({ file: pendingFile });
       setPendingFile(null);
+      return;
+    }
+    if (pollOpen) {
+      const q = pollQuestion.trim();
+      const opts = pollOptions.map((o) => o.trim()).filter(Boolean);
+      if (!q || opts.length < 2) return;
+      onSend({ text: q, type: 'poll', pollOptions: opts });
+      setPollOpen(false);
+      setPollQuestion('');
+      setPollOptions(['', '']);
       return;
     }
     const t = text.trim();
@@ -138,6 +152,54 @@ export default function MessageInput({ onSend, disabled, dark, onAfterChange }) 
         </div>
       )}
 
+      {/* Poll Maker */}
+      {pollOpen && (
+        <div className="mb-3 rounded-lg border border-border/50 bg-secondary/30 p-4 shadow-sm animate-scale-in max-w-sm">
+          <div className="flex items-center justify-between mb-3">
+             <h4 className="text-sm font-bold text-foreground">Create Poll</h4>
+             <button type="button" onClick={() => setPollOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <XMarkIcon className="h-4 w-4" />
+             </button>
+          </div>
+          <input
+            autoFocus
+            type="text"
+            placeholder="Ask a question..."
+            value={pollQuestion}
+            onChange={(e) => setPollQuestion(e.target.value)}
+            className="w-full mb-3 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground outline-none focus:border-primary/50"
+          />
+          <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+            {pollOptions.map((opt, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder={`Option ${i + 1}`}
+                  value={opt}
+                  onChange={(e) => {
+                    const newOpts = [...pollOptions];
+                    newOpts[i] = e.target.value;
+                    if (i === pollOptions.length - 1 && e.target.value) newOpts.push('');
+                    setPollOptions(newOpts);
+                  }}
+                  className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                />
+                {pollOptions.length > 2 && (
+                  <button type="button" onClick={() => setPollOptions(pollOptions.filter((_, idx) => idx !== i))} className="text-destructive hover:opacity-80 p-1">
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button type="button" onClick={submit} disabled={!pollQuestion.trim() || pollOptions.filter(o => o.trim()).length < 2} className="ws-btn-primary px-4 py-1.5 text-xs font-bold disabled:opacity-50">
+               Send Poll
+            </button>
+          </div>
+        </div>
+      )}
+
       <form onSubmit={submit} className="flex items-end gap-2">
         {/* Attach */}
         <input ref={fileRef} type="file" className="hidden" onChange={onFile} />
@@ -160,6 +222,17 @@ export default function MessageInput({ onSend, disabled, dark, onAfterChange }) 
           title="Emoji"
         >
           <FaceSmileIcon className="h-5 w-5" />
+        </button>
+
+        {/* Poll Toggle */}
+        <button
+          type="button"
+          onClick={() => { setPollOpen((o) => !o); setEmojiOpen(false); setPendingFile(null); }}
+          disabled={disabled}
+          className={`ws-icon-btn h-[44px] w-[44px] shrink-0 transition ${pollOpen ? 'border-primary/60 text-primary bg-primary/5' : ''}`}
+          title="Create Poll"
+        >
+          <ChartBarIcon className="h-5 w-5" />
         </button>
 
         {/* Textarea */}

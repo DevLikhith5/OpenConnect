@@ -227,6 +227,16 @@ export function registerSocketHandlers(io) {
       }
     });
 
+    socket.on('join_call_room', ({ callId }) => {
+      socket.join(`call:${callId}`);
+      socket.to(`call:${callId}`).emit('user_joined_call', { userId });
+    });
+
+    socket.on('leave_call_room', ({ callId }) => {
+      socket.leave(`call:${callId}`);
+      socket.to(`call:${callId}`).emit('user_left_call', { userId });
+    });
+
     socket.on('disconnect', async () => {
       await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() });
       for (const c of chats) {

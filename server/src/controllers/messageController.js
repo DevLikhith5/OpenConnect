@@ -35,6 +35,20 @@ export async function sendMessage(req, res) {
       return res.status(400).json({ error: 'File required' });
     }
 
+    let pollData = undefined;
+    if (type === 'poll' && req.body.pollOptions) {
+      msgType = 'poll';
+      try {
+        const options = JSON.parse(req.body.pollOptions);
+        pollData = {
+          question: text,
+          options: options.map(o => ({ text: o, votes: [] }))
+        };
+      } catch (err) {
+        return res.status(400).json({ error: 'Invalid poll options' });
+      }
+    }
+
     const message = await Message.create({
       chat: chatId,
       sender: req.userId,
@@ -45,6 +59,7 @@ export async function sendMessage(req, res) {
       fileName,
       mimeType,
       status: { deliveredTo: [], readBy: [] },
+      poll: pollData,
     });
 
     chat.lastMessage = message._id;
@@ -57,11 +72,15 @@ export async function sendMessage(req, res) {
     if (io) {
       io.to(`chat:${chatId}`).emit('new_message', { message: populated });
       const preview =
-        populated.type === 'text'
-          ? populated.content?.slice(0, 120) || ''
-          : populated.type === 'image'
-            ? '📷 Image'
-            : '📎 File';
+        populated.isEncrypted
+          ? '🔒 Encrypted message'
+          : populated.type === 'text'
+            ? populated.content?.slice(0, 120) || ''
+            : populated.type === 'image'
+              ? '📷 Image'
+              : populated.type === 'poll'
+                ? '📊 Poll'
+                : '📎 File';
       chat.participants.forEach((pid) => {
         io.to(`user:${pid}`).emit('chat_updated', { chatId, lastMessageAt: chat.lastMessageAt });
         if (String(pid) !== String(req.userId)) {
@@ -165,5 +184,44 @@ export async function clearChat(req, res) {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Failed to clear chat' });
+  }
+}
+
+export async function votePoll(req, res) {
+  try {
+    const { chatId } = req.params;
+    const { messageId, optionIndex } = req.body;
+
+    const message = await Message.findOne({ _id: messageId, chat: chatId, type: 'poll' });
+    if (!message) return res.status(404).json({ error: 'Poll not found' });
+
+    // Check if user is in the chat
+    const chat = await Chat.findOne({ _id: chatId, participants: req.userId });
+    if (!chat) return res.status(403).json({ error: 'Not in chat' });
+
+    if (optionIndex < 0 || optionIndex >= message.poll.options.length) {
+      return res.status(400).json({ error: 'Invalid option' });
+    }
+
+    // Remove user's previous vote if any
+    message.poll.options.forEach(opt => {
+      opt.votes = opt.votes.filter(v => String(v) !== String(req.userId));
+    });
+
+    // Add new vote
+    message.poll.options[optionIndex].votes.push(req.userId);
+    await message.save();
+
+    const populated = await Message.findById(message._id).populate('sender', 'name avatar').lean();
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat:${chatId}`).emit('poll_voted', { message: populated });
+    }
+
+    res.json({ message: populated });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to vote on poll' });
   }
 }

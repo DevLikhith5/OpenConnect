@@ -82,6 +82,9 @@ export default function ChatWindow({
   onClearChat,
   onBlockUser,
   isE2EE = false,
+  pendingUploads = [],
+  onOpenInfo,
+  onVotePoll,
 }) {
   const bottomRef = useRef(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -97,7 +100,7 @@ export default function ChatWindow({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typingUsers]);
+  }, [messages, typingUsers, pendingUploads]);
 
   useEffect(() => {
     if (!searchOpen || !chat?._id) return;
@@ -142,43 +145,50 @@ export default function ChatWindow({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-transparent">
       {/* ── Header ── */}
       <header className="workspace-chat-header flex items-center gap-3 px-4 py-3">
-        {(!chat.isGroup && other?.avatar) ? (
-          <img
-            src={other.avatar}
-            alt={displayName}
-            className="workspace-avatar-square h-10 w-10 shrink-0 object-cover"
-          />
-        ) : (
-          <div
-            className={`workspace-avatar-square flex h-10 w-10 shrink-0 items-center justify-center ${color} text-sm font-bold text-white`}
-          >
-            {initials}
+        <div 
+          className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:opacity-80 transition"
+          onClick={onOpenInfo}
+          role="button"
+          tabIndex={0}
+        >
+          {(chat.isGroup ? chat.avatar : other?.avatar) ? (
+            <img
+              src={chat.isGroup ? chat.avatar : other.avatar}
+              alt={displayName}
+              className="workspace-avatar-square h-10 w-10 shrink-0 object-cover"
+            />
+          ) : (
+            <div
+              className={`workspace-avatar-square flex h-10 w-10 shrink-0 items-center justify-center ${color} text-sm font-bold text-white`}
+            >
+              {initials}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-sm font-bold text-foreground">{displayName}</h2>
+            <p className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+              {isE2EE && (
+                <span className="inline-flex items-center gap-1 text-emerald-400">
+                  <LockClosedIcon className="h-3 w-3" />
+                  End-to-end encrypted
+                </span>
+              )}
+              {!isE2EE && (
+                chat.isGroup ? (
+                  `${chat.participants?.length || 0} members`
+                ) : other?.isOnline ? (
+                  <>
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 online-dot inline-block" />
+                    Online
+                  </>
+                ) : other?.lastSeen ? (
+                  `Last seen ${new Date(other.lastSeen).toLocaleString()}`
+                ) : (
+                  'Offline'
+                )
+              )}
+            </p>
           </div>
-        )}
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-bold text-foreground">{displayName}</h2>
-          <p className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
-            {isE2EE && (
-              <span className="inline-flex items-center gap-1 text-emerald-400">
-                <LockClosedIcon className="h-3 w-3" />
-                End-to-end encrypted
-              </span>
-            )}
-            {!isE2EE && (
-              chat.isGroup ? (
-                `${chat.participants?.length || 0} members`
-              ) : other?.isOnline ? (
-                <>
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 online-dot inline-block" />
-                  Online
-                </>
-              ) : other?.lastSeen ? (
-                `Last seen ${new Date(other.lastSeen).toLocaleString()}`
-              ) : (
-                'Offline'
-              )
-            )}
-          </p>
         </div>
 
         <div className="flex items-center gap-1 relative">
@@ -350,7 +360,7 @@ export default function ChatWindow({
                   ) : (
                     // ── Text / File bubble ──
                     <div
-                      className={`workspace-bubble relative px-4 py-2.5 ${
+                      className={`workspace-bubble relative px-3 py-2 flex flex-col min-w-[75px] ${
                         mine ? 'workspace-bubble-mine' : 'workspace-bubble-theirs'
                       }`}
                     >
@@ -368,19 +378,29 @@ export default function ChatWindow({
                         </a>
                       )}
 
-                      {/* Time + status — floated inline */}
-                      <div
-                        className={`float-right ml-3 mt-[3px] flex items-end gap-1 text-[10px] ${
-                          mine ? 'text-white/60' : 'text-muted-foreground'
-                        }`}
-                        style={{ lineHeight: 1 }}
-                      >
-                        <span>{formatMsgTime(m.createdAt)}</span>
-                        <StatusTicks mine={mine} status={m.status} participants={chat.participants} myId={user?.id} />
-                      </div>
-
-                      {/* Text */}
-                      {editingMsgId === m._id ? (
+                      {/* Content */}
+                      {m.type === 'poll' && m.poll ? (
+                        <div className="flex flex-col min-w-[200px] mb-1">
+                          <p className="font-bold text-sm leading-relaxed mb-3">{m.content || m.poll.question}</p>
+                          <div className="space-y-2">
+                            {m.poll.options.map((opt, i) => {
+                              const totalVotes = m.poll.options.reduce((acc, o) => acc + o.votes.length, 0);
+                              const myVote = opt.votes.some(v => String(v) === String(user?.id));
+                              const pct = totalVotes > 0 ? Math.round((opt.votes.length / totalVotes) * 100) : 0;
+                              return (
+                                <div key={i} onClick={() => onVotePoll?.(m._id, i)} className={`relative overflow-hidden rounded-md border p-2 cursor-pointer transition ${myVote ? 'border-primary/50 bg-primary/20' : mine ? 'border-white/20 bg-black/10 hover:bg-black/20' : 'border-border bg-background hover:bg-accent/50'}`}>
+                                  <div className={`absolute left-0 top-0 bottom-0 ${myVote ? 'bg-primary/30' : mine ? 'bg-white/10' : 'bg-primary/10'}`} style={{ width: `${pct}%`, transition: 'width 0.3s ease' }} />
+                                  <div className="relative z-10 flex items-center justify-between gap-3 text-sm">
+                                    <span className="font-medium truncate flex-1">{opt.text}</span>
+                                    {totalVotes > 0 && <span className="text-xs opacity-80 shrink-0">{pct}% ({opt.votes.length})</span>}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[10px] mt-2 opacity-60">Total votes: {m.poll.options.reduce((acc, o) => acc + o.votes.length, 0)}</p>
+                        </div>
+                      ) : editingMsgId === m._id ? (
                         <div className="mt-1 flex flex-col gap-2">
                           <input
                             type="text"
@@ -407,7 +427,17 @@ export default function ChatWindow({
                           )}
                         </p>
                       ) : null}
-                      <div className="clear-both" />
+
+                      {/* Time + status */}
+                      <div
+                        className={`self-end mt-1 flex items-center gap-1 text-[10px] ${
+                          mine ? 'text-white/70' : 'text-muted-foreground'
+                        }`}
+                        style={{ lineHeight: 1 }}
+                      >
+                        <span>{formatMsgTime(m.createdAt)}</span>
+                        <StatusTicks mine={mine} status={m.status} participants={chat.participants} myId={user?.id} />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -464,6 +494,30 @@ export default function ChatWindow({
               </div>
             );
           })}
+
+          {/* Pending Uploads Skeleton */}
+          {pendingUploads?.map((up) => (
+            <div key={up.id} className="msg-row flex items-end gap-2 justify-end animate-fade-in-up">
+              <div className="flex max-w-[72%] flex-col items-end">
+                {up.type === 'image' ? (
+                  <div className="relative overflow-hidden rounded-sm border border-border/40 shadow-md" style={{ minWidth: 160, maxWidth: 280 }}>
+                    <img src={up.localUrl} alt="Uploading..." className="block max-h-72 w-full object-cover opacity-50 blur-[2px]" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-white border-t-transparent shadow-md" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="workspace-bubble relative px-3 py-2 flex flex-col min-w-[75px] workspace-bubble-mine opacity-70">
+                    <div className="mb-1 flex items-center gap-2.5 rounded border border-white/20 bg-black/10 px-3 py-2 text-sm">
+                      <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
+                      <span className="truncate font-medium">{up.fileName || 'Uploading...'}</span>
+                    </div>
+                    <span className="self-end mt-1 text-[10px] text-white/70 italic" style={{ lineHeight: 1 }}>Uploading...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
 
           {/* Typing indicator */}
           {typingUsers?.length > 0 && (

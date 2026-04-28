@@ -16,12 +16,17 @@ export function CryptoProvider({ children, userId }) {
 
   // On mount (and whenever the logged-in userId changes): initialise key pair
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      setReady(false);
+      privateKeyRef.current = null;
+      sharedKeysRef.current = {};
+      return;
+    }
 
     let cancelled = false;
     (async () => {
       try {
-        const { publicKeyB64, privateKey } = await loadOrGenerateKeyPair();
+        const { publicKeyB64, privateKey } = await loadOrGenerateKeyPair(userId);
         if (cancelled) return;
 
         privateKeyRef.current = privateKey;

@@ -258,7 +258,7 @@ export default function Sidebar({
                   >
                     <div className="relative shrink-0">
                       <AvatarImg
-                        src={other?.avatar}
+                        src={c.isGroup ? c.avatar : other?.avatar}
                         name={displayName}
                         size="h-11 w-11"
                         extra={active ? 'ring-2 ring-primary/40' : ''}
@@ -278,11 +278,15 @@ export default function Sidebar({
                         </span>
                       </div>
                       <p className="truncate text-[11px] leading-none text-muted-foreground">
-                        {c.lastMessage?.type === 'image'
-                          ? '📷 Photo'
-                          : c.lastMessage?.type === 'file'
-                            ? '📎 File'
-                            : c.lastMessage?.content || 'No messages yet'}
+                        {c.lastMessage?.isEncrypted
+                          ? (c.lastMessage?.content && c.lastMessage?.content !== '🔒 (cannot decrypt)'
+                              ? c.lastMessage.content
+                              : 'Encrypted message')
+                          : c.lastMessage?.type === 'image'
+                            ? '📷 Photo'
+                            : c.lastMessage?.type === 'file'
+                              ? '📎 File'
+                              : c.lastMessage?.content || 'No messages yet'}
                       </p>
                     </div>
 

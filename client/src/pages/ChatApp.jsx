@@ -12,12 +12,13 @@ import NewGroupModal from '../components/NewGroupModal.jsx';
 import Sidebar from '../components/Sidebar.jsx';
 import SettingsPanel from '../components/SettingsPanel.jsx';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import ChatInfoPanel from '../components/ChatInfoPanel.jsx';
 
 export default function ChatApp() {
   const { user, logout, setUser } = useAuth();
   const { socket, connected } = useSocket();
   const { dark } = useTheme();
-  const { getSharedKey } = useCrypto();
+  const { ready: cryptoReady, getSharedKey } = useCrypto();
 
   // chatId → shared AES-GCM key (null = not a direct E2EE chat)
   const [sharedKey, setSharedKey] = useState(null);
@@ -37,24 +38,28 @@ export default function ChatApp() {
 
   const [incoming, setIncoming] = useState(null);
   const [activeCall, setActiveCall] = useState(null);
+  const [pendingUploads, setPendingUploads] = useState([]);
+  const [infoPanelOpen, setInfoPanelOpen] = useState(false);
 
   const typingTimer = useRef(null);
   const selectedIdRef = useRef(null);
+  const cryptoReadyRef = useRef(false);
+  cryptoReadyRef.current = cryptoReady;
 
   const selectedId = selected?._id;
   selectedIdRef.current = selectedId;
   const selectedRef = useRef(null);
   selectedRef.current = selected;
 
-  const loadChats = useCallback(async () => {
+  const loadChats = useCallback(async (isReady) => {
     try {
       const data = await api('/api/chats');
       const rawChats = data.chats || [];
-      
+
       const decryptedChats = await Promise.all(
         rawChats.map(async (c) => {
           if (c.lastMessage && c.lastMessage.isEncrypted && c.lastMessage.content) {
-            if (!c.isGroup) {
+            if (!c.isGroup && isReady) {
               const peerId = c.participants?.find((p) => String(p._id) !== String(user?.id))?._id;
               if (peerId) {
                 const key = await getSharedKey(c._id, peerId);
@@ -64,29 +69,42 @@ export default function ChatApp() {
                     ...c,
                     lastMessage: {
                       ...c.lastMessage,
-                      content: plain ?? '🔒 (cannot decrypt)',
+                      content: plain ?? '🔒 Encrypted message',
                     },
                   };
                 }
               }
             }
+            // Crypto not ready yet — hide ciphertext, show neutral label
+            if (!isReady) {
+              return {
+                ...c,
+                lastMessage: { ...c.lastMessage, content: 'Encrypted message' },
+              };
+            }
           }
           return c;
         })
       );
-      
+
       setChats(decryptedChats);
+      
+      const curSelectedId = selectedIdRef.current;
+      if (curSelectedId) {
+        const updated = decryptedChats.find((c) => String(c._id) === String(curSelectedId));
+        if (updated) setSelected(updated);
+      }
     } catch (e) {
       console.error(e);
     }
   }, [getSharedKey, user?.id]);
 
-  const loadMessages = useCallback(async (chatId) => {
+  const loadMessages = useCallback(async (chatId, keyOverride) => {
     try {
       const data = await api(`/api/chats/${chatId}/messages?limit=50`);
       const raw = data.messages || [];
-      // Decrypt any E2EE messages
-      const key = sharedKeyRef.current;
+      // Use the passed-in key first (avoids stale ref race condition), fall back to ref
+      const key = keyOverride !== undefined ? keyOverride : sharedKeyRef.current;
       const decrypted = await Promise.all(
         raw.map(async (m) => {
           if (m.isEncrypted && m.content && key) {
@@ -103,15 +121,16 @@ export default function ChatApp() {
     }
   }, []);
 
+  // Initial load
   useEffect(() => {
-    loadChats();
-  }, [loadChats]);
+    loadChats(cryptoReady);
+  }, [loadChats, cryptoReady]);
 
   useEffect(() => {
     if (!socket) return undefined;
 
-    const onRefresh = () => loadChats();
-    const onChatUpdated = () => loadChats();
+    const onRefresh = () => loadChats(cryptoReadyRef.current);
+    const onChatUpdated = () => loadChats(cryptoReadyRef.current);
 
     const onNewMsg = async ({ message }) => {
       const cid = message.chat;
@@ -119,7 +138,7 @@ export default function ChatApp() {
         let msg = message;
         if (message.isEncrypted && message.content && sharedKeyRef.current) {
           const plain = await decryptText(sharedKeyRef.current, message.content);
-          msg = { ...message, content: plain ?? '🔒 (cannot decrypt)' };
+          msg = { ...message, content: plain ?? '🔒 Encrypted message' };
         }
         setMessages((prev) => {
           if (prev.some((m) => String(m._id) === String(msg._id))) return prev;
@@ -128,7 +147,7 @@ export default function ChatApp() {
         socket.emit('message_delivered', { messageId: message._id, chatId: cid });
         socket.emit('mark_chat_read', { chatId: cid });
       }
-      loadChats();
+      loadChats(cryptoReadyRef.current);
     };
 
     const onMsgDeleted = ({ messageId }) => {
@@ -139,19 +158,40 @@ export default function ChatApp() {
       let finalContent = content;
       const key = sharedKeyRef.current;
       
-      if (isEncrypted && key) {
-        const plain = await decryptText(key, content);
-        finalContent = plain ?? '🔒 (cannot decrypt)';
+      if (isEncrypted) {
+        if (key) {
+          const plain = await decryptText(key, content);
+          finalContent = plain ?? '🔒 Encrypted message';
+        } else {
+          finalContent = 'Encrypted message';
+        }
       }
 
       setMessages((prev) =>
         prev.map((m) =>
-          String(m._id) === String(messageId) ? { ...m, content: finalContent, editedAt } : m
+          String(m._id) === String(messageId)
+            ? { ...m, content: finalContent, editedAt }
+            : m
         )
       );
     };
 
-    const onChatCleared = ({ chatId }) => {
+    const onPollVoted = async ({ message }) => {
+      let finalMsg = message;
+      if (message.isEncrypted && message.content && sharedKeyRef.current) {
+        const plain = await decryptText(sharedKeyRef.current, message.content);
+        finalMsg = { ...message, content: plain ?? '🔒 Encrypted message' };
+      } else if (message.isEncrypted && !sharedKeyRef.current) {
+        finalMsg = { ...message, content: 'Encrypted message' };
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          String(m._id) === String(message._id) ? finalMsg : m
+        )
+      );
+    };
+
+    const onCleared = ({ chatId }) => {
       if (String(chatId) === String(selectedIdRef.current)) setMessages([]);
     };
 
@@ -190,7 +230,7 @@ export default function ChatApp() {
       );
     };
 
-    const onPresence = () => loadChats();
+    const onPresence = () => loadChats(cryptoReadyRef.current);
 
     const onNotif = (n) => {
       if (n.kind === 'message') {
@@ -223,9 +263,12 @@ export default function ChatApp() {
     socket.on('new_message', onNewMsg);
     socket.on('message_deleted', onMsgDeleted);
     socket.on('message_edited', onMsgEdited);
-    socket.on('chat_cleared', onChatCleared);
+    socket.on('poll_voted', onPollVoted);
+    socket.on('chat_cleared', onCleared);
     socket.on('typing', onTyping);
     socket.on('message_status', onStatus);
+    socket.on('chats_refresh', onRefresh);
+    socket.on('chat_updated', onChatUpdated);
     socket.on('presence', onPresence);
     socket.on('notification', onNotif);
     socket.on('call_incoming', onIncomingCall);
@@ -236,9 +279,12 @@ export default function ChatApp() {
       socket.off('new_message', onNewMsg);
       socket.off('message_deleted', onMsgDeleted);
       socket.off('message_edited', onMsgEdited);
-      socket.off('chat_cleared', onChatCleared);
+      socket.off('poll_voted', onPollVoted);
+      socket.off('chat_cleared', onCleared);
       socket.off('typing', onTyping);
       socket.off('message_status', onStatus);
+      socket.off('chats_refresh', onRefresh);
+      socket.off('chat_updated', onChatUpdated);
       socket.off('presence', onPresence);
       socket.off('notification', onNotif);
       socket.off('call_incoming', onIncomingCall);
@@ -255,28 +301,36 @@ export default function ChatApp() {
     if (!socket || !selectedId) return undefined;
     socket.emit('join_chat', { chatId: selectedId }, () => {});
     socket.emit('mark_chat_read', { chatId: selectedId });
-    loadMessages(selectedId);
+    // Pass the current sharedKey so decryption works on first load (avoids stale ref)
+    loadMessages(selectedId, sharedKeyRef.current);
     return () => {
       socket.emit('leave_chat', { chatId: selectedId });
     };
-  }, [socket, selectedId, loadMessages]);
+  }, [socket, selectedId, loadMessages, sharedKey]);
 
   const selectChat = useCallback(
     async (c) => {
       setSelected(c);
       setActiveView('chat');
       setMobileSidebar(false);
+      setInfoPanelOpen(false);
 
       // Derive E2EE shared key for direct (non-group) chats
       if (!c.isGroup) {
         const peerId = c.participants?.find((p) => String(p._id) !== String(user?.id))?._id;
         const key = peerId ? await getSharedKey(c._id, peerId) : null;
+        // Update ref immediately so loadMessages triggered by the useEffect can use it
+        sharedKeyRef.current = key;
         setSharedKey(key);
+        // Pre-load messages with the fresh key directly (no stale ref issue)
+        loadMessages(c._id, key);
       } else {
+        sharedKeyRef.current = null;
         setSharedKey(null); // group chats — no E2EE yet
+        loadMessages(c._id, null);
       }
     },
-    [getSharedKey, user?.id]
+    [getSharedKey, user?.id, loadMessages]
   );
 
   const handleSend = useCallback(
@@ -285,6 +339,14 @@ export default function ChatApp() {
       const key = sharedKeyRef.current;
       try {
         if (payload.file) {
+          const isImage = payload.file.type.startsWith('image/');
+          const localUrl = isImage ? URL.createObjectURL(payload.file) : null;
+          const uploadId = Date.now();
+          setPendingUploads((prev) => [
+            ...prev,
+            { id: uploadId, type: isImage ? 'image' : 'file', localUrl, fileName: payload.file.name },
+          ]);
+
           const fd = new FormData();
           if (payload.text && key) {
             const ciphertext = await encryptText(key, payload.text);
@@ -294,7 +356,29 @@ export default function ChatApp() {
             fd.append('content', payload.text);
           }
           fd.append('file', payload.file);
-          await api(`/api/chats/${selectedId}/messages`, { method: 'POST', body: fd });
+
+          try {
+            await api(`/api/chats/${selectedId}/messages`, { method: 'POST', body: fd });
+          } finally {
+            setPendingUploads((prev) => prev.filter((u) => u.id !== uploadId));
+            if (localUrl) URL.revokeObjectURL(localUrl);
+          }
+        } else if (payload.type === 'poll') {
+          let ciphertext = payload.text;
+          let isEncrypted = false;
+          if (key) {
+             ciphertext = await encryptText(key, payload.text);
+             isEncrypted = true;
+          }
+          await api(`/api/chats/${selectedId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({ 
+              content: ciphertext, 
+              type: 'poll', 
+              pollOptions: JSON.stringify(payload.pollOptions),
+              isEncrypted 
+            }),
+          });
         } else if (payload.text) {
           if (key) {
             const ciphertext = await encryptText(key, payload.text);
@@ -419,13 +503,80 @@ export default function ChatApp() {
         // Refresh own user data so blockedUsers array is current
         const { user: fresh } = await api('/api/auth/me');
         setUser(fresh);
-        loadChats();
+        loadChats(cryptoReadyRef.current);
       } catch (e) {
         console.error('Block failed', e);
         alert(e.message || 'Action failed');
       }
     },
     [loadChats]
+  );
+
+  const handleRemoveMember = useCallback(
+    async (memberId) => {
+      if (!selectedId) return;
+      if (!window.confirm('Remove this member from the group?')) return;
+      try {
+        await api(`/api/chats/${selectedId}/remove-member`, {
+          method: 'POST',
+          body: JSON.stringify({ memberId })
+        });
+        loadChats(cryptoReadyRef.current);
+      } catch (e) {
+        alert(e.message || 'Failed to remove member');
+      }
+    },
+    [selectedId, loadChats]
+  );
+
+  const handlePromoteAdmin = useCallback(
+    async (memberId) => {
+      if (!selectedId) return;
+      if (!window.confirm('Promote this member to Admin?')) return;
+      try {
+        await api(`/api/chats/${selectedId}/promote-admin`, {
+          method: 'POST',
+          body: JSON.stringify({ memberId })
+        });
+        loadChats(cryptoReadyRef.current);
+      } catch (e) {
+        alert(e.message || 'Failed to promote member');
+      }
+    },
+    [selectedId, loadChats]
+  );
+
+  const handleUploadGroupAvatar = useCallback(
+    async (file) => {
+      if (!selectedId) return;
+      try {
+        const fd = new FormData();
+        fd.append('avatar', file);
+        await api(`/api/chats/${selectedId}/avatar`, {
+          method: 'POST',
+          body: fd
+        });
+        loadChats(cryptoReadyRef.current);
+      } catch (e) {
+        alert(e.message || 'Failed to upload group image');
+      }
+    },
+    [selectedId, loadChats]
+  );
+
+  const handleVotePoll = useCallback(
+    async (messageId, optionIndex) => {
+      if (!selectedId) return;
+      try {
+        await api(`/api/chats/${selectedId}/messages/poll-vote`, {
+          method: 'POST',
+          body: JSON.stringify({ messageId, optionIndex })
+        });
+      } catch (e) {
+        alert(e.message || 'Failed to vote');
+      }
+    },
+    [selectedId]
   );
 
   const typingUsers = useMemo(() => typingMap[selectedId] || [], [typingMap, selectedId]);
@@ -517,7 +668,7 @@ export default function ChatApp() {
           body: JSON.stringify({ userId: u._id }),
         });
         setNewChatOpen(false);
-        await loadChats();
+        await loadChats(cryptoReadyRef.current);
         selectChat(data.chat);
       } catch (e) {
         alert(e.message || 'Failed');
@@ -569,24 +720,43 @@ export default function ChatApp() {
         {activeView === 'settings' ? (
           <SettingsPanel onLogout={logout} />
         ) : (
-          <ChatWindow
-            chat={selected}
-            messages={messages}
-            user={user}
-            typingUsers={typingUsers}
-            onSend={handleSend}
-            onSearchQuery={handleSearchInChat}
-            onCallVideo={() => startOutgoingCall('video')}
-            onCallAudio={() => startOutgoingCall('audio')}
-            dark={dark}
-            socket={socket}
-            onTypingActivity={typingActivity}
-            onDeleteMessage={handleDeleteMessage}
-            onEditMessage={handleEditMessage}
-            onClearChat={handleClearChat}
-            onBlockUser={handleBlockUser}
-            isE2EE={!!sharedKey}
-          />
+          <div className="flex-1 flex flex-row min-h-0 overflow-hidden relative">
+            <ChatWindow
+              chat={selected}
+              messages={messages}
+              user={user}
+              typingUsers={typingUsers}
+              pendingUploads={pendingUploads}
+              onSend={handleSend}
+              onSearchQuery={handleSearchInChat}
+              onCallVideo={() => startOutgoingCall('video')}
+              onCallAudio={() => startOutgoingCall('audio')}
+              dark={dark}
+              socket={socket}
+              onTypingActivity={typingActivity}
+              onDeleteMessage={handleDeleteMessage}
+              onEditMessage={handleEditMessage}
+              onClearChat={handleClearChat}
+              onBlockUser={handleBlockUser}
+              onVotePoll={handleVotePoll}
+              isE2EE={!!sharedKey}
+              onOpenInfo={() => setInfoPanelOpen(true)}
+            />
+            {infoPanelOpen && selected && (
+              <div className="absolute inset-y-0 right-0 z-50 w-full shrink-0 border-l border-border bg-card md:static md:w-[340px] md:z-0 shadow-2xl md:shadow-none animate-fade-in-up">
+                <ChatInfoPanel
+                  chat={selected}
+                  user={user}
+                  onClose={() => setInfoPanelOpen(false)}
+                  onBlockUser={handleBlockUser}
+                  onClearChat={handleClearChat}
+                  onRemoveMember={handleRemoveMember}
+                  onPromoteAdmin={handlePromoteAdmin}
+                  onUploadGroupAvatar={handleUploadGroupAvatar}
+                />
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -596,7 +766,7 @@ export default function ChatApp() {
         onClose={() => setNewGroupOpen(false)}
         onCreated={(chat) => {
           setActiveView('chat');
-          loadChats();
+          loadChats(cryptoReadyRef.current);
           selectChat(chat);
         }}
       />

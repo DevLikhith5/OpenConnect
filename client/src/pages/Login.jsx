@@ -30,7 +30,7 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      nav('/', { replace: true });
+      nav('/app', { replace: true });
     } catch (e2) {
       setErr(e2.message || 'Login failed');
     } finally {
@@ -43,7 +43,7 @@ export default function Login() {
     setGoogleLoading(true);
     try {
       await loginWithGoogle(credential);
-      nav('/', { replace: true });
+      nav('/app', { replace: true });
     } catch (e) {
       setErr(e.message || 'Google sign-in failed');
     } finally {

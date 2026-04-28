@@ -222,3 +222,94 @@ export async function searchMessages(req, res) {
     res.status(500).json({ error: 'Search failed' });
   }
 }
+
+export async function uploadGroupAvatar(req, res) {
+  try {
+    const { chatId } = req.params;
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const chat = await Chat.findOne({ _id: chatId, participants: req.userId, isGroup: true });
+    if (!chat) return res.status(404).json({ error: 'Group not found' });
+
+    const isAdmin = chat.admins?.map(String).includes(String(req.userId));
+    if (!isAdmin) return res.status(403).json({ error: 'Only admins can change group image' });
+
+    const avatarUrl = req.file.path?.startsWith('http') ? req.file.path : `/uploads/${req.file.filename}`;
+    chat.avatar = avatarUrl;
+    await chat.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      chat.participants.forEach((pid) => {
+        io.to(`user:${pid}`).emit('chats_refresh');
+      });
+    }
+    res.json({ ok: true, avatar: avatarUrl });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to upload group image' });
+  }
+}
+
+export async function removeMember(req, res) {
+  try {
+    const { chatId } = req.params;
+    const { memberId } = req.body;
+
+    const chat = await Chat.findOne({ _id: chatId, participants: req.userId, isGroup: true });
+    if (!chat) return res.status(404).json({ error: 'Group not found' });
+
+    const isAdmin = chat.admins?.map(String).includes(String(req.userId));
+    if (!isAdmin) return res.status(403).json({ error: 'Only admins can remove members' });
+
+    if (String(memberId) === String(req.userId)) return res.status(400).json({ error: 'Use leave group instead' });
+
+    chat.participants = chat.participants.filter(p => String(p) !== String(memberId));
+    chat.admins = chat.admins.filter(a => String(a) !== String(memberId));
+    await chat.save();
+
+    const io = req.app.get('io');
+    if (io) {
+      [...chat.participants, memberId].forEach((pid) => {
+        io.to(`user:${pid}`).emit('chats_refresh');
+      });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to remove member' });
+  }
+}
+
+export async function promoteAdmin(req, res) {
+  try {
+    const { chatId } = req.params;
+    const { memberId } = req.body;
+
+    const chat = await Chat.findOne({ _id: chatId, participants: req.userId, isGroup: true });
+    if (!chat) return res.status(404).json({ error: 'Group not found' });
+
+    const isAdmin = chat.admins?.map(String).includes(String(req.userId));
+    if (!isAdmin) return res.status(403).json({ error: 'Only admins can promote members' });
+
+    if (!chat.participants.map(String).includes(String(memberId))) {
+      return res.status(400).json({ error: 'User is not in the group' });
+    }
+
+    if (!chat.admins.map(String).includes(String(memberId))) {
+      chat.admins.push(memberId);
+      await chat.save();
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      chat.participants.forEach((pid) => {
+        io.to(`user:${pid}`).emit('chats_refresh');
+      });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to promote member' });
+  }
+}

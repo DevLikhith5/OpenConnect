@@ -24,22 +24,39 @@ function fromB64(b64) {
 // ── Key generation & persistence ───────────────────────────────────────────
 
 /** Generate a fresh ECDH key pair and persist to localStorage. */
-export async function generateAndStoreKeyPair() {
+export async function generateAndStoreKeyPair(userId) {
   const pair = await crypto.subtle.generateKey(ECDH_PARAMS, true, ['deriveKey', 'deriveBits']);
 
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
   const publicRaw  = await crypto.subtle.exportKey('raw',  pair.publicKey);
 
-  localStorage.setItem('e2ee_private_jwk', JSON.stringify(privateJwk));
-  localStorage.setItem('e2ee_public_b64',  toB64(publicRaw));
+  localStorage.setItem(`e2ee_private_jwk_${userId}`, JSON.stringify(privateJwk));
+  localStorage.setItem(`e2ee_public_b64_${userId}`,  toB64(publicRaw));
 
   return { publicKeyB64: toB64(publicRaw), pair };
 }
 
 /** Load the stored key pair from localStorage, or generate one if absent. */
-export async function loadOrGenerateKeyPair() {
-  const storedJwk    = localStorage.getItem('e2ee_private_jwk');
-  const storedPubB64 = localStorage.getItem('e2ee_public_b64');
+export async function loadOrGenerateKeyPair(userId) {
+  if (!userId) throw new Error("userId is required for E2EE key management");
+
+  const privateKeyName = `e2ee_private_jwk_${userId}`;
+  const publicKeyName = `e2ee_public_b64_${userId}`;
+
+  let storedJwk    = localStorage.getItem(privateKeyName);
+  let storedPubB64 = localStorage.getItem(publicKeyName);
+
+  // Migrate legacy keys if present
+  if (!storedJwk || !storedPubB64) {
+    const legacyJwk = localStorage.getItem('e2ee_private_jwk');
+    const legacyPub = localStorage.getItem('e2ee_public_b64');
+    if (legacyJwk && legacyPub) {
+      localStorage.setItem(privateKeyName, legacyJwk);
+      localStorage.setItem(publicKeyName, legacyPub);
+      storedJwk = legacyJwk;
+      storedPubB64 = legacyPub;
+    }
+  }
 
   if (storedJwk && storedPubB64) {
     try {
@@ -56,7 +73,7 @@ export async function loadOrGenerateKeyPair() {
     }
   }
 
-  const { publicKeyB64, pair } = await generateAndStoreKeyPair();
+  const { publicKeyB64, pair } = await generateAndStoreKeyPair(userId);
   return { publicKeyB64, privateKey: pair.privateKey };
 }
 

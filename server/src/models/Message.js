@@ -4,7 +4,7 @@ const messageSchema = new mongoose.Schema(
   {
     chat: { type: mongoose.Schema.Types.ObjectId, ref: 'Chat', required: true, index: true },
     sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    type: { type: String, enum: ['text', 'image', 'file'], default: 'text' },
+    type: { type: String, enum: ['text', 'image', 'file', 'poll'], default: 'text' },
     content: { type: String, default: '' },
     isEncrypted: { type: Boolean, default: false },
     editedAt: { type: Date, default: null },
@@ -15,6 +15,15 @@ const messageSchema = new mongoose.Schema(
       deliveredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
       readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     },
+    poll: {
+      question: { type: String, default: '' },
+      options: [
+        {
+          text: { type: String, required: true },
+          votes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+        }
+      ]
+    }
   },
   { timestamps: true }
 );

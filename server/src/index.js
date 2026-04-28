@@ -46,8 +46,11 @@ app.use('/api/chats', chatRoutes);
 app.use('/api/calls', callRoutes);
 
 app.use((err, _req, res, _next) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: 'File is too large. Maximum size is 5MB for avatars and 15MB for attachments.' });
+  }
   console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
 const mongoUri = process.env.MONGODB_URI;

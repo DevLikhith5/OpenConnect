@@ -31,7 +31,7 @@ export default function Register() {
     setLoading(true);
     try {
       await signup(name, email, password);
-      nav('/', { replace: true });
+      nav('/app', { replace: true });
     } catch (e2) {
       setErr(e2.message || 'Signup failed');
     } finally {
@@ -44,7 +44,7 @@ export default function Register() {
     setGoogleLoading(true);
     try {
       await loginWithGoogle(credential);
-      nav('/', { replace: true });
+      nav('/app', { replace: true });
     } catch (e) {
       setErr(e.message || 'Google sign-up failed');
     } finally {
